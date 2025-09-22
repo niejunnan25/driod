@@ -17,11 +17,11 @@ from droid.robot_env import RobotEnv
 import tqdm
 import tyro
 from typing import Optional
-
+from utils import crop_left_right
 faulthandler.enable()
 
 # DROID data collection frequency -- we slow down execution to match this frequency
-DROID_CONTROL_FREQUENCY = 15
+DROID_CONTROL_FREQUENCY = 10
 
 
 @dataclasses.dataclass
@@ -33,16 +33,17 @@ class Args:
 
     # Policy parameters
     external_camera: Optional[str] = (
-        None  # which external camera should be fed to the policy, choose from ["left", "right"]
+        "left"  # which external camera should be fed to the policy, choose from ["left", "right"]
     )
     # Rollout parameters
-    max_timesteps: int = 600
+    max_timesteps: int = 500
     # How many actions to execute from a predicted action chunk before querying policy server again
     # 8 is usually a good default (equals 0.5 seconds of action execution).
     open_loop_horizon: int = 8
+    # open_loop_horizon: int = 8
 
     # Remote server parameters
-    remote_host: str = "162.105.195.51"  # point this to the IP address of the policy server, e.g., "192.168.1.100"
+    remote_host: str = "localhost"  # point this to the IP address of the policy server, e.g., "192.168.1.100"
     remote_port: int = (
         8055  # point this to the port of the policy server, default server port for openpi servers is 8000
     )
@@ -77,7 +78,7 @@ def main(args: Args):
     ), f"Please specify an external camera to use for the policy, choose from ['left', 'right'], but got {args.external_camera}"
 
     # Initialize the Panda environment. Using joint velocity action space and gripper position action space is very important.
-    env = RobotEnv(action_space="joint_velocity", gripper_action_space="position")
+    env = RobotEnv(action_space="joint_position", gripper_action_space="position")
     print("Created the droid env!")
 
     # Connect to the policy server
@@ -117,12 +118,11 @@ def main(args: Args):
                     # We resize images on the robot laptop to minimize the amount of data sent to the policy server
                     # and improve latency.
                     request_data = {
-                        "observation/exterior_image_1_left": image_tools.resize_with_pad(
+                        "observation/image": image_tools.resize_with_pad(
                             curr_obs[f"{args.external_camera}_image"], 224, 224
                         ),
-                        "observation/wrist_image_left": image_tools.resize_with_pad(curr_obs["wrist_image"], 224, 224),
-                        "observation/joint_position": curr_obs["joint_position"],
-                        "observation/gripper_position": curr_obs["gripper_position"],
+                        "observation/wrist_image": image_tools.resize_with_pad(curr_obs["wrist_image"], 224, 224),
+                        "observation/state": np.concatenate((curr_obs["joint_position"], curr_obs["gripper_position"]), axis=0),
                         "prompt": instruction,
                     }
 
@@ -131,14 +131,15 @@ def main(args: Args):
                     with prevent_keyboard_interrupt():
                         # this returns action chunk [10, 8] of 10 joint velocity actions (7) + gripper position (1)
                         pred_action_chunk = policy_client.infer(request_data)["actions"]
-                    assert pred_action_chunk.shape == (10, 8)
-
+                    # assert pred_action_chunk.shape == (10, 8)
+                        pred_action_chunk = pred_action_chunk[:, :8]
                 # Select current action to execute from chunk
                 action = pred_action_chunk[actions_from_chunk_completed]
+                print(f"\n当前 {t_step} 的 actions 是： {action}")
                 actions_from_chunk_completed += 1
 
                 # Binarize gripper action
-                if action[-1].item() > 0.5:
+                if action[-1].item() > 0.20:
                     # action[-1] = 1.0
                     action = np.concatenate([action[:-1], np.ones((1,))])
                 else:
@@ -146,7 +147,7 @@ def main(args: Args):
                     action = np.concatenate([action[:-1], np.zeros((1,))])
 
                 # clip all dimensions of action to [-1, 1]
-                action = np.clip(action, -1, 1)
+                # action = np.clip(action, -1, 1)
 
                 env.step(action)
 
@@ -195,9 +196,13 @@ def main(args: Args):
     print(f"Results saved to {csv_filename}")
 
 
-def _extract_observation(args: Args, obs_dict, *, save_to_disk=False):
+def _extract_observation(args: Args, obs_dict, *, save_to_disk=False, crop_ratios=(0.27, 0.13)):
+    from PIL import Image
+    import numpy as np
+
     image_observations = obs_dict["image"]
     left_image, right_image, wrist_image = None, None, None
+
     for key in image_observations:
         if args.left_camera_id in key and "left" in key:
             left_image = image_observations[key]
@@ -206,13 +211,18 @@ def _extract_observation(args: Args, obs_dict, *, save_to_disk=False):
         elif args.wrist_camera_id in key and "left" in key:
             wrist_image = image_observations[key]
 
-    # 检查图像是否为 None
-    if left_image is not None:
-        left_image = left_image[..., :3][..., ::-1]  # 移除 alpha 通道并转换为 RGB
-    if right_image is not None:
-        right_image = right_image[..., :3][..., ::-1]
-    if wrist_image is not None:
-        wrist_image = wrist_image[..., :3][..., ::-1]
+    def process_image(img):
+        if img is None:
+            return None
+        img = img[..., :3][..., ::-1]  # 去 alpha & 转 RGB
+        pil_img = Image.fromarray(img)
+        if crop_ratios:
+            pil_img = crop_left_right(pil_img, *crop_ratios)  # 裁剪
+        return np.array(pil_img)  # 返回 numpy
+
+    left_image = process_image(left_image)
+    right_image = process_image(right_image)
+    wrist_image = process_image(wrist_image)
 
     # 机器人状态
     robot_state = obs_dict["robot_state"]
@@ -220,13 +230,11 @@ def _extract_observation(args: Args, obs_dict, *, save_to_disk=False):
     joint_position = np.array(robot_state["joint_positions"])
     gripper_position = np.array([robot_state["gripper_position"]])
 
-    # 保存图像到磁盘
     if save_to_disk:
         images_to_save = [img for img in [left_image, wrist_image, right_image] if img is not None]
         if images_to_save:
             combined_image = np.concatenate(images_to_save, axis=1)
-            combined_image = Image.fromarray(combined_image)
-            combined_image.save("robot_camera_views.png")
+            Image.fromarray(combined_image).save("robot_camera_views.png")
 
     return {
         "left_image": left_image,
@@ -236,7 +244,6 @@ def _extract_observation(args: Args, obs_dict, *, save_to_disk=False):
         "joint_position": joint_position,
         "gripper_position": gripper_position,
     }
-
 
 if __name__ == "__main__":
     args: Args = tyro.cli(Args)

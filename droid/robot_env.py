@@ -7,6 +7,9 @@ from droid.calibration.calibration_utils import load_calibration_info
 from droid.camera_utils.info import camera_type_dict
 from droid.camera_utils.wrappers.multi_camera_wrapper import MultiCameraWrapper
 from droid.misc.parameters import hand_camera_id, nuc_ip
+
+from droid.misc.parameters import nuc_ip
+
 from droid.misc.server_interface import ServerInterface
 from droid.misc.time import time_ms
 from droid.misc.transformations import change_pose_frame
@@ -24,7 +27,9 @@ class RobotEnv(gym.Env):
         self.check_action_range = "velocity" in action_space
 
         # Robot Configuration
-        self.reset_joints = np.array([0, -1 / 5 * np.pi, 0, -4 / 5 * np.pi, 0, 3 / 5 * np.pi, 0.0])
+        # self.reset_joints = np.array([0, -1 / 5 * np.pi, 0, -4 / 5 * np.pi, 0, 3 / 5 * np.pi, 0.0])
+        # xlab gello reset pose
+        self.reset_joints = np.array([0, 0, 0, -1 / 2 * np.pi, 0, 1 / 2 * np.pi, 0.0])
         self.randomize_low = np.array([-0.1, -0.2, -0.1, -0.3, -0.3, -0.3])
         self.randomize_high = np.array([0.1, 0.2, 0.1, 0.3, 0.3, 0.3])
         self.DoF = 7 if ("cartesian" in action_space) else 8
@@ -37,7 +42,7 @@ class RobotEnv(gym.Env):
         else:
             self._robot = ServerInterface(ip_address=nuc_ip)
 
-        # Create Cameras
+        # # Create Cameras
         self.camera_reader = MultiCameraWrapper(camera_kwargs)
         self.calibration_dict = load_calibration_info()
         self.camera_type_dict = camera_type_dict
@@ -131,3 +136,7 @@ class RobotEnv(gym.Env):
         obs_dict["camera_intrinsics"] = intrinsics
 
         return obs_dict
+     
+    def get_ee_pose(self):
+        ee_pose=self._robot.get_ee_pose()
+        return ee_pose

@@ -21,7 +21,7 @@ from typing import Optional
 faulthandler.enable()
 
 # DROID data collection frequency -- we slow down execution to match this frequency
-DROID_CONTROL_FREQUENCY = 15
+DROID_CONTROL_FREQUENCY = 10
 
 
 @dataclasses.dataclass
@@ -36,7 +36,7 @@ class Args:
         None  # which external camera should be fed to the policy, choose from ["left", "right"]
     )
     # Rollout parameters
-    max_timesteps: int = 600
+    max_timesteps: int = 1200
     # How many actions to execute from a predicted action chunk before querying policy server again
     # 8 is usually a good default (equals 0.5 seconds of action execution).
     open_loop_horizon: int = 8
@@ -77,7 +77,7 @@ def main(args: Args):
     ), f"Please specify an external camera to use for the policy, choose from ['left', 'right'], but got {args.external_camera}"
 
     # Initialize the Panda environment. Using joint velocity action space and gripper position action space is very important.
-    env = RobotEnv(action_space="joint_velocity", gripper_action_space="position")
+    env = RobotEnv(action_space="joint_position", gripper_action_space="position")
     print("Created the droid env!")
 
     # Connect to the policy server
@@ -117,12 +117,11 @@ def main(args: Args):
                     # We resize images on the robot laptop to minimize the amount of data sent to the policy server
                     # and improve latency.
                     request_data = {
-                        "observation/exterior_image_1_left": image_tools.resize_with_pad(
+                        "observation/image": image_tools.resize_with_pad(
                             curr_obs[f"{args.external_camera}_image"], 224, 224
                         ),
-                        "observation/wrist_image_left": image_tools.resize_with_pad(curr_obs["wrist_image"], 224, 224),
-                        "observation/joint_position": curr_obs["joint_position"],
-                        "observation/gripper_position": curr_obs["gripper_position"],
+                        "observation/wrist_image": image_tools.resize_with_pad(curr_obs["wrist_image"], 224, 224),
+                        "observation/state": np.concatenate((curr_obs["joint_position"], curr_obs["gripper_position"]), axis=0),
                         "prompt": instruction,
                     }
 
@@ -146,7 +145,7 @@ def main(args: Args):
                     action = np.concatenate([action[:-1], np.zeros((1,))])
 
                 # clip all dimensions of action to [-1, 1]
-                action = np.clip(action, -1, 1)
+                # action = np.clip(action, -1, 1)
 
                 env.step(action)
 

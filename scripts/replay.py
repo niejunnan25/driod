@@ -17,11 +17,12 @@ from droid.robot_env import RobotEnv
 import tqdm
 import tyro
 from typing import Optional
+import pickle
 
 faulthandler.enable()
 
 # DROID data collection frequency -- we slow down execution to match this frequency
-DROID_CONTROL_FREQUENCY = 15
+DROID_CONTROL_FREQUENCY = 5
 
 
 @dataclasses.dataclass
@@ -39,7 +40,7 @@ class Args:
     max_timesteps: int = 600
     # How many actions to execute from a predicted action chunk before querying policy server again
     # 8 is usually a good default (equals 0.5 seconds of action execution).
-    open_loop_horizon: int = 8
+    open_loop_horizon: int = 4
 
     # Remote server parameters
     remote_host: str = "162.105.195.51"  # point this to the IP address of the policy server, e.g., "192.168.1.100"
@@ -77,14 +78,14 @@ def main(args: Args):
     ), f"Please specify an external camera to use for the policy, choose from ['left', 'right'], but got {args.external_camera}"
 
     # Initialize the Panda environment. Using joint velocity action space and gripper position action space is very important.
-    env = RobotEnv(action_space="joint_velocity", gripper_action_space="position")
+    env = RobotEnv(action_space="joint_position", gripper_action_space="position")
     print("Created the droid env!")
 
     # Connect to the policy server
     policy_client = websocket_client_policy.WebsocketClientPolicy(args.remote_host, args.remote_port)
 
     df = pd.DataFrame(columns=["success", "duration", "video_filename"])
-
+    i = 0
     while True:
         instruction = input("Enter instruction: ")
 
@@ -97,6 +98,9 @@ def main(args: Args):
         video = []
         bar = tqdm.tqdm(range(args.max_timesteps))
         print("Running rollout... press Ctrl+C to stop early.")
+        dir = "/home/ubuntu/pi0/data_corn_50_0730/pick_up_the_corn_on_the_plate/0730_173650"
+        pkl_files = sorted([pkl_file for pkl_file in os.listdir(dir) if pkl_file.endswith(".pkl")])
+
         for t_step in bar:
             start_time = time.time()
             try:
@@ -117,12 +121,11 @@ def main(args: Args):
                     # We resize images on the robot laptop to minimize the amount of data sent to the policy server
                     # and improve latency.
                     request_data = {
-                        "observation/exterior_image_1_left": image_tools.resize_with_pad(
+                        "observation/image": image_tools.resize_with_pad(
                             curr_obs[f"{args.external_camera}_image"], 224, 224
                         ),
-                        "observation/wrist_image_left": image_tools.resize_with_pad(curr_obs["wrist_image"], 224, 224),
-                        "observation/joint_position": curr_obs["joint_position"],
-                        "observation/gripper_position": curr_obs["gripper_position"],
+                        "observation/wrist_image": image_tools.resize_with_pad(curr_obs["wrist_image"], 224, 224),
+                        "observation/state": np.concatenate((curr_obs["joint_position"], curr_obs["gripper_position"]), axis=0),
                         "prompt": instruction,
                     }
 
@@ -138,6 +141,8 @@ def main(args: Args):
                 actions_from_chunk_completed += 1
 
                 # Binarize gripper action
+                with open(f"{os.path.join(dir, pkl_files[i])}", "rb") as f:
+                    action = pickle.load(f)["control"]
                 if action[-1].item() > 0.5:
                     # action[-1] = 1.0
                     action = np.concatenate([action[:-1], np.ones((1,))])
@@ -146,8 +151,11 @@ def main(args: Args):
                     action = np.concatenate([action[:-1], np.zeros((1,))])
 
                 # clip all dimensions of action to [-1, 1]
-                action = np.clip(action, -1, 1)
+                # action = np.clip(action, -1, 1)
 
+                i += 1
+                print(pkl_files[i])
+                print(action)
                 env.step(action)
 
                 # Sleep to match DROID data collection frequency
