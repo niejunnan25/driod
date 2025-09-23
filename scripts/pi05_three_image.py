@@ -1,5 +1,7 @@
 # ruff: noqa
 
+# TODO: 完成 Three Image 的推理脚本
+
 import contextlib
 import dataclasses
 import datetime
@@ -88,7 +90,7 @@ def main(args: Args):
     policy_client = websocket_client_policy.WebsocketClientPolicy(args.remote_host, args.remote_port)
     print(f"成功连接到 {args.remote_host}:{args.remote_port}!")
 
-    df = pd.DataFrame(columns=["success", "duration", "is_follow", "object", "language_instruction", "video_filename"])
+    df = pd.DataFrame(columns=["success", "duration", "language_instruction", "video_filename"])
 
     while True:
         instruction = input("请输入语言指令: ")
@@ -218,34 +220,11 @@ def main(args: Args):
             if not (0 <= success <= 1):
                 print(f"数字必须在 0~100 之间")
 
-        import re
-        from typing import Optional
-
-        KNOWN_OBJECTS = ["corn", "green pepper", "red pepper", "garlic", "potato", "cabbage"]
-
-        def extract_object(instruction: str) -> Optional[str]:
-            text = instruction.lower()
-
-            for obj in KNOWN_OBJECTS:
-                # 用 \b 确保是独立的单词，避免 "scorn" 里误匹配 "corn"
-                pattern = r"\b" + re.escape(obj) + r"\b"
-                if re.search(pattern, text):
-                    return obj
-            return None
-        
-        if success == 1.0:
-            is_follow = True
-            object = extract_object(instruction)
-        else:
-            is_follow = False
-            object = input("请输入当前被错误抓取的物体名称: ")
 
         df = pd.concat(
             [df, pd.DataFrame([{
                 "success": success,
-                "duration": len(third_video),
-                "is_follow": is_follow,
-                "object": object,
+                "duration": t_step,
                 "language_instruction": instruction,
                 "video_filename": f"{video_stamp}_video.mp4",
             }])],
