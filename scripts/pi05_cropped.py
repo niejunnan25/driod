@@ -38,16 +38,18 @@ class Args:
         "left"  # which external camera should be fed to the policy, choose from ["left", "right"]
     )
     # Rollout parameters
-    max_timesteps: int = 500
+    max_timesteps: int = 1200
     # How many actions to execute from a predicted action chunk before querying policy server again
     # 8 is usually a good default (equals 0.5 seconds of action execution).
     open_loop_horizon: int = 8
     # open_loop_horizon: int = 8
 
     # Remote server parameters
-    remote_host: str = "localhost"  # point this to the IP address of the policy server, e.g., "192.168.1.100"
+    
+    remote_port : int = "162.105.195.74"
+    # remote_host: str = "localhost"  # point this to the IP address of the policy server, e.g., "192.168.1.100"
     remote_port: int = (
-        8055  # point this to the port of the policy server, default server port for openpi servers is 8000
+        8000  # point this to the port of the policy server, default server port for openpi servers is 8000
     )
 
 
@@ -183,15 +185,9 @@ def main(args: Args):
         def save_video(frames, filename):
             if not frames:
                 return
-            frames = np.stack(frames)
-            h, w, _ = frames[0].shape
-            fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-            out = cv2.VideoWriter(filename, fourcc, 10, (w, h))
-            for frame in frames:
-                frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-                out.write(frame_bgr)
-            out.release()
-            print(f"视频保存完成: {filename}")
+            clip = ImageSequenceClip(frames, fps=10)
+            clip.write_videofile(filename, codec="libx264", audio=False)
+            print(f"视频保存完成 {filename}")
 
         os.makedirs("results/video", exist_ok=True)
 
